@@ -1,6 +1,5 @@
 
 import math
-import os
 import requests
 import threading
 import time
@@ -8,17 +7,11 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
 from core.activity_logger import ActivityLogger
+from core.config import RpcConfig
 from core.provider_errors import ProviderError
 
 
 class SafetyBot:
-
-    RPC_URL = os.environ.get(
-        "NEXUS_SOLANA_RPC_URL",
-        "https://api.mainnet-beta.solana.com",
-    )
-    RPC_FALLBACK_URL = os.environ.get("NEXUS_SOLANA_RPC_FALLBACK_URL")
-
     TOKEN_PROGRAMS = {
         "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
         "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
@@ -27,7 +20,12 @@ class SafetyBot:
     MIN_LIQUIDITY_USD = 10000
     MIN_RPC_REQUEST_INTERVAL_SECONDS = 0.5
 
-    def __init__(self):
+    def __init__(self, config=None):
+        self.rpc_config = (
+            RpcConfig.load()
+            if config is None
+            else config
+        )
         self.session = requests.Session()
         self.session.headers.update({
             "Content-Type": "application/json",
@@ -36,6 +34,37 @@ class SafetyBot:
         self._rpc_lock = threading.Lock()
         self._last_rpc_request_at = 0.0
         self._rpc_cooldown_until = 0.0
+
+    @property
+    def RPC_URL(self):
+        return self.rpc_config.primary_url
+
+    @RPC_URL.setter
+    def RPC_URL(self, value):
+        primary_url = value.strip() if isinstance(value, str) else value
+        fallback_url = self.rpc_config.fallback_url
+        if fallback_url == primary_url:
+            fallback_url = None
+        self.rpc_config = RpcConfig(
+            primary_url=primary_url,
+            fallback_url=fallback_url,
+        )
+
+    @property
+    def RPC_FALLBACK_URL(self):
+        return self.rpc_config.fallback_url
+
+    @RPC_FALLBACK_URL.setter
+    def RPC_FALLBACK_URL(self, value):
+        fallback_url = value.strip() if isinstance(value, str) else None
+        if fallback_url == "":
+            fallback_url = None
+        if fallback_url == self.rpc_config.primary_url:
+            fallback_url = None
+        self.rpc_config = RpcConfig(
+            primary_url=self.rpc_config.primary_url,
+            fallback_url=fallback_url,
+        )
 
     @staticmethod
     def _finite_nonnegative(value, field_name):
@@ -87,9 +116,13 @@ class SafetyBot:
             "params": params
         }
 
-        endpoints = [self.RPC_URL]
-        if self.RPC_FALLBACK_URL and self.RPC_FALLBACK_URL != self.RPC_URL:
-            endpoints.append(self.RPC_FALLBACK_URL)
+        endpoints = [self.rpc_config.primary_url]
+        fallback_url = self.rpc_config.fallback_url
+        if (
+            fallback_url
+            and fallback_url != self.rpc_config.primary_url
+        ):
+            endpoints.append(fallback_url)
 
         last_error = None
         for endpoint in endpoints:
